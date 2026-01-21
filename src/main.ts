@@ -53,7 +53,31 @@ export default class OpenSidebarHover extends Plugin {
   rightSplitMouseEnterHandler: () => void;
   leftSplitMouseMoveHandler: () => void;
   rightSplitMouseMoveHandler: () => void;
-  
+  workspaceChangeTimeout: NodeJS.Timeout | null = null
+
+
+  handleWorkspaceChange() {
+    // Debounce to ensure DOM is ready
+    if (this.workspaceChangeTimeout) clearTimeout(this.workspaceChangeTimeout);
+    
+    this.workspaceChangeTimeout = setTimeout(() => {
+      this.forceReinitialize();
+    }, 100);
+  }
+
+  forceReinitialize() {
+    // Reset all state and get fresh references
+    this.leftSplit = this.app.workspace.leftSplit as any;
+    this.rightSplit = this.app.workspace.rightSplit as any;
+    this.isHoveringLeft = false;
+    this.isHoveringRight = false;
+    
+    // Clean and reattach
+    this.detachEventListeners();
+    this.attachEventListeners();
+    this.collapseBoth();
+  }
+
   // Event handler for document clicks
   documentClickHandler = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -75,6 +99,64 @@ export default class OpenSidebarHover extends Plugin {
     }
   };
 
+  attachEventListeners(){
+    document.addEventListener("mousemove", this.mouseMoveHandler);
+
+    // To prevent plugin from breaking after workspace changes
+    this.registerEvent( this.app.workspace.on('layout-change', () => {
+        this.handleWorkspaceChange()
+      })
+    )
+    
+    // Enhanced implementation with hover class for right split
+    this.rightSplitMouseMoveHandler = () => this.rightSplit.containerEl.addClass('hovered');
+    this.rightSplit.containerEl.addEventListener(
+      "mousemove", 
+      this.rightSplitMouseMoveHandler
+    );
+    this.rightSplit.containerEl.addEventListener(
+      "mouseleave",
+      this.rightSplitMouseLeaveHandler
+    );
+    this.rightSplitMouseEnterHandler = () => { 
+      this.isHoveringRight = true; 
+      this.rightSplit.containerEl.addClass('hovered');
+    };
+    this.rightSplit.containerEl.addEventListener(
+      "mouseenter",
+      this.rightSplitMouseEnterHandler
+    );
+    
+    // Enhanced implementation with hover class for left split
+    if (this.leftRibbon && this.leftRibbon.containerEl) {
+      this.leftRibbon.containerEl.addEventListener(
+        "mouseenter",
+        this.leftRibbonMouseEnterHandler
+      );
+    }
+    
+    this.leftSplitMouseMoveHandler = () => this.leftSplit.containerEl.addClass('hovered');
+    this.leftSplit.containerEl.addEventListener(
+      "mousemove", 
+      this.leftSplitMouseMoveHandler
+    );
+    this.leftSplit.containerEl.addEventListener(
+      "mouseleave",
+      this.leftSplitMouseLeaveHandler
+    );
+    this.leftSplitMouseEnterHandler = () => { 
+      this.isHoveringLeft = true; 
+      this.leftSplit.containerEl.addClass('hovered');
+    };
+    this.leftSplit.containerEl.addEventListener(
+      "mouseenter",
+      this.leftSplitMouseEnterHandler
+    );
+    
+    // Add a document-wide click handler to help with collapse issues
+    document.addEventListener("click", this.documentClickHandler);
+  }
+
   async onload() {
     await this.loadSettings();
 
@@ -88,7 +170,7 @@ export default class OpenSidebarHover extends Plugin {
 
     // Update CSS variables based on settings
     this.updateCSSVariables();
-    
+
     this.app.workspace.onLayoutReady(() => {
       // Cast to extended interfaces to access internal properties
       this.leftSplit = this.app.workspace.leftSplit as unknown as ExtendedWorkspaceSplit;
@@ -96,55 +178,7 @@ export default class OpenSidebarHover extends Plugin {
       this.leftRibbon = this.app.workspace.leftRibbon as unknown as ExtendedWorkspaceRibbon;
       
       // add event listeners - IMPORTANT: REMOVE IN UNLOAD()
-      document.addEventListener("mousemove", this.mouseMoveHandler);
-      
-      // Enhanced implementation with hover class for right split
-      this.rightSplitMouseMoveHandler = () => this.rightSplit.containerEl.addClass('hovered');
-      this.rightSplit.containerEl.addEventListener(
-        "mousemove", 
-        this.rightSplitMouseMoveHandler
-      );
-      this.rightSplit.containerEl.addEventListener(
-        "mouseleave",
-        this.rightSplitMouseLeaveHandler
-      );
-      this.rightSplitMouseEnterHandler = () => { 
-        this.isHoveringRight = true; 
-        this.rightSplit.containerEl.addClass('hovered');
-      };
-      this.rightSplit.containerEl.addEventListener(
-        "mouseenter",
-        this.rightSplitMouseEnterHandler
-      );
-      
-      // Enhanced implementation with hover class for left split
-      if (this.leftRibbon && this.leftRibbon.containerEl) {
-        this.leftRibbon.containerEl.addEventListener(
-          "mouseenter",
-          this.leftRibbonMouseEnterHandler
-        );
-      }
-      
-      this.leftSplitMouseMoveHandler = () => this.leftSplit.containerEl.addClass('hovered');
-      this.leftSplit.containerEl.addEventListener(
-        "mousemove", 
-        this.leftSplitMouseMoveHandler
-      );
-      this.leftSplit.containerEl.addEventListener(
-        "mouseleave",
-        this.leftSplitMouseLeaveHandler
-      );
-      this.leftSplitMouseEnterHandler = () => { 
-        this.isHoveringLeft = true; 
-        this.leftSplit.containerEl.addClass('hovered');
-      };
-      this.leftSplit.containerEl.addEventListener(
-        "mouseenter",
-        this.leftSplitMouseEnterHandler
-      );
-      
-      // Add a document-wide click handler to help with collapse issues
-      document.addEventListener("click", this.documentClickHandler);
+      this.attachEventListeners();
     });
 
     this.addSettingTab(new SidebarHoverSettingsTab(this.app, this));
@@ -160,8 +194,7 @@ export default class OpenSidebarHover extends Plugin {
     document.body.classList.remove("open-sidebar-hover-plugin");
 
     // remove all event listeners
-    document.removeEventListener("mousemove", this.mouseMoveHandler);
-    document.removeEventListener("click", this.documentClickHandler);
+    this.detachEventListeners();
     
     // Clean up right split event listeners
     if (this.rightSplit && this.rightSplit.containerEl) {
@@ -201,6 +234,11 @@ export default class OpenSidebarHover extends Plugin {
       const oldMousemove = () => this.leftSplit.containerEl.addClass('hovered');
       this.leftSplit.containerEl.removeEventListener("mousemove", oldMousemove);
     }
+  }
+
+  detachEventListeners(){
+    document.removeEventListener("mousemove", this.mouseMoveHandler);
+    document.removeEventListener("click", this.documentClickHandler);
   }
 
   async loadSettings() {
