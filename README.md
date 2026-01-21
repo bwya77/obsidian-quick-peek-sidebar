@@ -1,5 +1,7 @@
 # Quick Peek Sidebar
 
+![Github All Releases](https://img.shields.io/github/downloads/bwya77/obsidian-quick-peek-sidebar/total.svg)
+
 Automatically expand and collapse the left/right or both sidebars when hovering over the edge of the window.
 
 ![Demo video](/images/demo.gif) 
