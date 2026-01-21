@@ -1,7 +1,7 @@
 {
 	"id": "quick-peek-sidebar",
 	"name": "Quick Peek Sidebar",
-	"version": "1.0.2",
+	"version": "1.0.4",
 	"minAppVersion": "0.15.0",
 	"description": "Opens the left and/or right side panel by hovering over it.",
 	"author": "Bradley Wyatt",

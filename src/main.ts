@@ -22,7 +22,8 @@ interface OpenSidebarHoverSettings {
   leftSideBarPixelTrigger: number;
   rightSideBarPixelTrigger: number;
   overlayMode: boolean;
-  doubleClickPin: boolean,
+  doubleClickPin: boolean;
+  onlyWhenFocused: boolean;
   expandCollapseSpeed: number;
   leftSidebarMaxWidth: number;
   rightSidebarMaxWidth: number;
@@ -39,6 +40,7 @@ const DEFAULT_SETTINGS: OpenSidebarHoverSettings = {
   rightSideBarPixelTrigger: 20,
   overlayMode: false,
   doubleClickPin: false,
+  onlyWhenFocused: false,
   expandCollapseSpeed: 370,
   leftSidebarMaxWidth: 325,
   rightSidebarMaxWidth: 325,
@@ -71,6 +73,33 @@ export default class OpenSidebarHover extends Plugin {
     handler: EventListener;
   }> = [];
 
+  // Helper to check if user is actively editing (rename input, context menu open, etc.)
+  isActivelyEditing(): boolean {
+    // Check for open context menus
+    const hasOpenMenu = document.querySelector('.menu') !== null;
+    if (hasOpenMenu) return true;
+
+    // Check for items being renamed in file explorer
+    const hasRenameInput = document.querySelector('.is-being-renamed') !== null;
+    if (hasRenameInput) return true;
+
+    // Check if an input or editable element inside a sidebar is focused
+    const activeEl = document.activeElement as HTMLElement;
+    if (activeEl) {
+      const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA';
+      const isEditable = activeEl.isContentEditable;
+
+      if (isInput || isEditable) {
+        // Check if the focused element is within either sidebar
+        const inLeftSidebar = this.leftSplit?.containerEl?.contains(activeEl);
+        const inRightSidebar = this.rightSplit?.containerEl?.contains(activeEl);
+        if (inLeftSidebar || inRightSidebar) return true;
+      }
+    }
+
+    return false;
+  }
+
   handleWorkspaceChange() {
     // Wait to ensure DOM is ready
     if (this.workspaceChangeTimeout) clearTimeout(this.workspaceChangeTimeout);
@@ -97,28 +126,34 @@ export default class OpenSidebarHover extends Plugin {
   documentClickHandler = (e: MouseEvent) => {
     const target = e.target as HTMLElement;
     const now = Date.now();
-    
+
     // Check if this is a double click (same target within threshold)
-    const isDoubleClick = this.lastClickTarget === target && 
+    const isDoubleClick = this.lastClickTarget === target &&
                          (now - this.lastClickTime) < this.doubleClickThreshold;
-    
+
     // Update tracking variables
     this.lastClickTime = now;
     this.lastClickTarget = target;
-    
+
     // Handle double-click for pinning if enabled
     if (isDoubleClick && this.settings.doubleClickPin) {
       this.handleSidebarDoubleClick(target);
       return; // Skip single-click logic for double-clicks
     }
-    
+
+    // Don't collapse if user is actively editing (rename, menu open, etc.)
+    if (this.isActivelyEditing()) return;
+
+    // Don't collapse if window is not focused and setting is enabled
+    if (this.settings.onlyWhenFocused && !document.hasFocus()) return;
+
     // Original single-click logic
     // Make sure leftSplit and rightSplit are initialized
     if (!this.leftSplit || !this.rightSplit) return;
-    
+
     const leftSplitEl = this.leftSplit.containerEl;
     const rightSplitEl = this.rightSplit.containerEl;
-    
+
     // If clicking outside sidebar areas and they're expanded, collapse them
     if (!leftSplitEl.contains(target) && !rightSplitEl.contains(target)) {
       if (!this.leftSplit.collapsed && this.settings.leftSidebar && !this.isPinnedLeft) {
@@ -212,12 +247,38 @@ export default class OpenSidebarHover extends Plugin {
     if (this.settings.overlayMode) {
       document.body.classList.add("sidebar-overlay-mode");
     }
-    
+
     // Add global CSS class to implement the suggested JS-CSS approach
     document.body.classList.add("open-sidebar-hover-plugin");
 
     // Update CSS variables based on settings
     this.updateCSSVariables();
+
+    // Register hotkey commands to toggle sidebars
+    this.addCommand({
+      id: 'toggle-left-sidebar',
+      name: 'Toggle left sidebar',
+      callback: () => {
+        this.toggleLeftSidebar();
+      }
+    });
+
+    this.addCommand({
+      id: 'toggle-right-sidebar',
+      name: 'Toggle right sidebar',
+      callback: () => {
+        this.toggleRightSidebar();
+      }
+    });
+
+    this.addCommand({
+      id: 'toggle-both-sidebars',
+      name: 'Toggle both sidebars',
+      callback: () => {
+        this.toggleBothSidebars();
+      },
+      hotkeys: [{ modifiers: [], key: 'Escape' }]
+    });
 
     this.app.workspace.onLayoutReady(() => {
       // Cast to extended interfaces to access internal properties
@@ -335,11 +396,79 @@ export default class OpenSidebarHover extends Plugin {
     this.collapseRight();
     this.collapseLeft();
   }
+
+  // Toggle left sidebar only - used by hotkey command
+  // When showing via hotkey, sidebar is pinned and won't auto-hide until hotkey is pressed again
+  toggleLeftSidebar() {
+    if (!this.leftSplit) return;
+
+    const leftExpanded = !this.leftSplit.collapsed;
+
+    if (leftExpanded) {
+      this.isPinnedLeft = false;
+      this.leftSplit.collapse();
+      this.isHoveringLeft = false;
+    } else {
+      this.expandLeft();
+      this.isPinnedLeft = true;
+    }
+  }
+
+  // Toggle right sidebar only - used by hotkey command
+  toggleRightSidebar() {
+    if (!this.rightSplit) return;
+
+    const rightExpanded = !this.rightSplit.collapsed;
+
+    if (rightExpanded) {
+      this.isPinnedRight = false;
+      this.rightSplit.collapse();
+      this.isHoveringRight = false;
+    } else {
+      this.expandRight();
+      this.isPinnedRight = true;
+    }
+  }
+
+  // Toggle both sidebars - used by hotkey command
+  toggleBothSidebars() {
+    const leftExpanded = this.leftSplit && !this.leftSplit.collapsed;
+    const rightExpanded = this.rightSplit && !this.rightSplit.collapsed;
+
+    if (leftExpanded || rightExpanded) {
+      // At least one sidebar is expanded - collapse both and unpin
+      this.isPinnedLeft = false;
+      this.isPinnedRight = false;
+      if (this.leftSplit) {
+        this.leftSplit.collapse();
+        this.isHoveringLeft = false;
+      }
+      if (this.rightSplit) {
+        this.rightSplit.collapse();
+        this.isHoveringRight = false;
+      }
+    } else {
+      // Both sidebars are collapsed - expand and pin both
+      if (this.leftSplit) {
+        this.expandLeft();
+        this.isPinnedLeft = true;
+      }
+      if (this.rightSplit) {
+        this.expandRight();
+        this.isPinnedRight = true;
+      }
+    }
+  }
   
   // Event handlers
   mouseMoveHandler = (event: MouseEvent) => {
+    // Skip hover detection if setting is enabled and window is not focused
+    if (this.settings.onlyWhenFocused && !document.hasFocus()) {
+      return;
+    }
+
     const mouseX = event.clientX;
-    
+
     // Handle right sidebar hover
     if (this.settings.rightSidebar) {
       if (!this.isHoveringRight && this.rightSplit.collapsed && !this.isPinnedRight) {
@@ -398,20 +527,27 @@ export default class OpenSidebarHover extends Plugin {
   rightSplitMouseLeaveHandler = (event: MouseEvent) => {
     // Don't process if we're leaving to the tab header container or a menu
     const target = event.relatedTarget as HTMLElement;
-    if (target && (target.closest('.workspace-tab-header-container-inner') || 
-                  (target.hasClass && target.hasClass('menu')) || 
-                  target?.classList?.contains('menu') || 
+    if (target && (target.closest('.workspace-tab-header-container-inner') ||
+                  (target.hasClass && target.hasClass('menu')) ||
+                  target?.classList?.contains('menu') ||
                   target?.closest('.menu'))) {
       return;
     }
-    
+
+    // Don't collapse if window is not focused and setting is enabled
+    if (this.settings.onlyWhenFocused && !document.hasFocus()) return;
+
+    // Don't collapse if user is actively editing (rename, menu open, etc.)
+    if (this.isActivelyEditing()) return;
+
     if (this.settings.rightSidebar && !this.isPinnedRight) {
       this.isHoveringRight = false;
       // Remove the hovered class
       this.rightSplit.containerEl.removeClass('hovered');
 
       setTimeout(() => {
-        if (!this.isHoveringRight) {
+        // Re-check editing state before collapsing
+        if (!this.isHoveringRight && !this.isActivelyEditing()) {
           if (this.settings.syncLeftRight && this.settings.leftSidebar) {
             this.collapseBoth();
           } else {
@@ -425,12 +561,18 @@ export default class OpenSidebarHover extends Plugin {
   leftSplitMouseLeaveHandler = (event: MouseEvent) => {
     // Don't process if we're leaving to the tab header container or a menu
     const target = event.relatedTarget as HTMLElement;
-    if (target && (target.closest('.workspace-tab-header-container-inner') || 
-                  (target.hasClass && target.hasClass('menu')) || 
-                  target?.classList?.contains('menu') || 
+    if (target && (target.closest('.workspace-tab-header-container-inner') ||
+                  (target.hasClass && target.hasClass('menu')) ||
+                  target?.classList?.contains('menu') ||
                   target?.closest('.menu'))) {
       return;
     }
+
+    // Don't collapse if window is not focused and setting is enabled
+    if (this.settings.onlyWhenFocused && !document.hasFocus()) return;
+
+    // Don't collapse if user is actively editing (rename, menu open, etc.)
+    if (this.isActivelyEditing()) return;
 
     if (this.settings.leftSidebar && !this.isPinnedLeft) {
       this.isHoveringLeft = false;
@@ -438,7 +580,8 @@ export default class OpenSidebarHover extends Plugin {
       this.leftSplit.containerEl.removeClass('hovered');
 
       setTimeout(() => {
-        if (!this.isHoveringLeft) {
+        // Re-check editing state before collapsing
+        if (!this.isHoveringLeft && !this.isActivelyEditing()) {
           if (this.settings.syncLeftRight && this.settings.rightSidebar) {
             this.collapseBoth();
           } else {
@@ -555,7 +698,21 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         })
     );
-      
+
+    new Setting(containerEl)
+    .setName("Only when focused")
+    .setDesc(
+      "When enabled, sidebar hover will only trigger when Obsidian is the focused application. Useful when using split screen with other apps."
+    )
+    .addToggle((t) =>
+      t
+        .setValue(this.plugin.settings.onlyWhenFocused)
+        .onChange(async (value) => {
+          this.plugin.settings.onlyWhenFocused = value;
+          await this.plugin.saveSettings();
+        })
+    );
+
     // BEHAVIOR SECTION
     new Setting(containerEl).setName("Behavior").setHeading();
 
