@@ -34,6 +34,7 @@ Here is the sidebar settings formatted in the requested table style:
 | Right Sidebar Hover | Enables the expansion and collapsing of the right sidebar on hover.                     | Enabled |
 | Sync Left and Right | Expands both sidebars simultaneously when one is hovered (requires both to be enabled). | Disabled |
 | Overlay Mode        | Sidebars slide over the main content instead of pushing it.                             | Disabled |
+| Double Click Pin Sidebar        | Double click to keep sidebar open. Double click again to unpin it                             | Disabled | 
 
 ### Behavior
 
