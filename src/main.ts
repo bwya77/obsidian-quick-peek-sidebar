@@ -35,14 +35,14 @@ const DEFAULT_SETTINGS: OpenSidebarHoverSettings = {
   rightSidebar: true,
   syncLeftRight: false,
   enforceSameDelay: true,
-  sidebarDelay: 150,
+  sidebarDelay: 1200,
   sidebarExpandDelay: 10,
   leftSideBarPixelTrigger: 20,
   rightSideBarPixelTrigger: 20,
   overlayMode: false,
   doubleClickPin: false,
   onlyWhenFocused: false,
-  expandCollapseSpeed: 370,
+  expandCollapseSpeed: 550,
   leftSidebarMaxWidth: 325,
   rightSidebarMaxWidth: 325,
 };
@@ -116,11 +116,43 @@ export default class OpenSidebarHover extends Plugin {
     this.rightSplit = this.app.workspace.rightSplit as any;
     this.isHoveringLeft = false;
     this.isHoveringRight = false;
-    
-    // Clean and reattach
+
+    this.patchSplitAnimation(this.leftSplit?.containerEl, "left");
+    this.patchSplitAnimation(this.rightSplit?.containerEl, "right");
+
+    // Clean and reattach listeners to the (possibly new) container elements.
+    // We intentionally do NOT force an immediate collapse here: 'layout-change'
+    // fires on routine actions like switching the active note, and an
+    // unconditional collapseBoth() here used to bypass sidebarDelay entirely.
+    // Normal hover/click handling already manages auto-collapse timing.
     this.detachManualEvents();
     this.attachManualEvents();
-    this.collapseBoth();
+  }
+
+  // Obsidian's WorkspaceSidedock collapse()/expand() animates the container's
+  // width using Element.animate() (Web Animations API) with a duration baked
+  // into Obsidian's own code (140ms), not a CSS variable. CSS transitions
+  // never fire on a property driven by a running Web Animations API
+  // animation, so our stylesheet's --sidebar-expand-collapse-speed has no
+  // effect on it. To honor the user's setting, intercept animate() calls on
+  // the sidebar container and override the requested duration — but only
+  // when that side's hover feature is enabled; a disabled sidebar should keep
+  // Obsidian's native animation/behavior untouched.
+  patchSplitAnimation(el: HTMLElement | null | undefined, side: "left" | "right") {
+    if (!el || (el as any)._quickPeekAnimatePatched) return;
+    (el as any)._quickPeekAnimatePatched = true;
+    const originalAnimate = el.animate.bind(el);
+    const plugin = this;
+    el.animate = function (
+      keyframes: Keyframe[] | PropertyIndexedKeyframes | null,
+      options?: number | KeyframeAnimationOptions
+    ) {
+      const enabled = side === "left" ? plugin.settings.leftSidebar : plugin.settings.rightSidebar;
+      if (enabled && options && typeof options === "object") {
+        options = { ...options, duration: plugin.settings.expandCollapseSpeed };
+      }
+      return originalAnimate(keyframes as any, options as any);
+    };
   }
 
   // Event handler for document clicks (now handles both single and double clicks)
@@ -156,12 +188,22 @@ export default class OpenSidebarHover extends Plugin {
     const rightSplitEl = this.rightSplit.containerEl;
 
     // If clicking outside sidebar areas and they're expanded, collapse them
+    // after the configured delay (re-checking hover state), so clicking into
+    // the editor to start typing doesn't bypass sidebarDelay.
     if (!leftSplitEl.contains(target) && !rightSplitEl.contains(target)) {
       if (!this.leftSplit.collapsed && this.settings.leftSidebar && !this.isPinnedLeft) {
-        this.collapseLeft();
+        setTimeout(() => {
+          if (!this.isHoveringLeft && !this.isActivelyEditing()) {
+            this.collapseLeft();
+          }
+        }, this.settings.sidebarDelay);
       }
       if (!this.rightSplit.collapsed && this.settings.rightSidebar && !this.isPinnedRight) {
-        this.collapseRight();
+        setTimeout(() => {
+          if (!this.isHoveringRight && !this.isActivelyEditing()) {
+            this.collapseRight();
+          }
+        }, this.settings.sidebarDelay);
       }
     }
   };
@@ -314,6 +356,7 @@ export default class OpenSidebarHover extends Plugin {
 
     // Update CSS variables based on settings
     this.updateCSSVariables();
+    this.updateEnabledBodyClasses();
 
     // Register hotkey commands to toggle sidebars
     this.addCommand({
@@ -346,7 +389,13 @@ export default class OpenSidebarHover extends Plugin {
       this.leftSplit = this.app.workspace.leftSplit as unknown as ExtendedWorkspaceSplit;
       this.rightSplit = this.app.workspace.rightSplit as unknown as ExtendedWorkspaceSplit;
       this.leftRibbon = this.app.workspace.leftRibbon as unknown as ExtendedWorkspaceRibbon;
-      
+
+      // Obsidian animates sidebar collapse/expand width via the Web Animations
+      // API with a hardcoded duration, which ignores CSS transitions entirely.
+      // Patch each split's animate() so our expandCollapseSpeed setting applies.
+      this.patchSplitAnimation(this.leftSplit?.containerEl, "left");
+      this.patchSplitAnimation(this.rightSplit?.containerEl, "right");
+
       // Collapse sidebars when mouse enters the root editing area
       const rootSplitEl = (this.app.workspace.rootSplit as unknown as ExtendedWorkspaceSplit).containerEl;
       this.registerDomEvent(rootSplitEl, 'mouseenter', () => {
@@ -354,20 +403,47 @@ export default class OpenSidebarHover extends Plugin {
         // hovering over it. The isHoveringLeft/isHoveringRight flags are set
         // by stable mouseenter/mouseleave handlers on the sidebar containers
         // (which don't fire when moving between children).
+        // Collapse is delayed by sidebarDelay (and re-checks hover state
+        // afterwards) so this path doesn't short-circuit the configured
+        // collapse delay when the mouse crosses straight from a sidebar
+        // into the editor.
         if (this.settings.leftSidebar && !this.isPinnedLeft && !this.isHoveringLeft) {
           this.leftSplit?.containerEl?.removeClass('hovered');
-          this.collapseLeft();
+          setTimeout(() => {
+            if (!this.isHoveringLeft && !this.isActivelyEditing()) {
+              this.collapseLeft();
+            }
+          }, this.settings.sidebarDelay);
         }
         if (this.settings.rightSidebar && !this.isPinnedRight && !this.isHoveringRight) {
           this.rightSplit?.containerEl?.removeClass('hovered');
-          this.collapseRight();
+          setTimeout(() => {
+            if (!this.isHoveringRight && !this.isActivelyEditing()) {
+              this.collapseRight();
+            }
+          }, this.settings.sidebarDelay);
         }
       });
 
-      // Collapse when mouse leaves the window entirely
+      // Collapse when mouse leaves the window entirely (e.g. moving toward
+      // another monitor/app). Delayed and re-checked like every other
+      // collapse path so it respects sidebarDelay instead of collapsing
+      // instantly while the user is just passing through.
       this.registerDomEvent(document, 'mouseleave', () => {
-        if (!this.isPinnedLeft) this.collapseLeft();
-        if (!this.isPinnedRight) this.collapseRight();
+        if (this.settings.leftSidebar && !this.isPinnedLeft) {
+          setTimeout(() => {
+            if (!this.isHoveringLeft && !this.isActivelyEditing()) {
+              this.collapseLeft();
+            }
+          }, this.settings.sidebarDelay);
+        }
+        if (this.settings.rightSidebar && !this.isPinnedRight) {
+          setTimeout(() => {
+            if (!this.isHoveringRight && !this.isActivelyEditing()) {
+              this.collapseRight();
+            }
+          }, this.settings.sidebarDelay);
+        }
       });
 
       this.registerDomEvent(document, "click", this.documentClickHandler);
@@ -429,15 +505,26 @@ export default class OpenSidebarHover extends Plugin {
         --left-trigger-width: ${this.settings.leftSideBarPixelTrigger}px;
         --right-trigger-width: ${this.settings.rightSideBarPixelTrigger}px;
       }
-      
+      ${this.settings.leftSidebar ? `
       body {
         --sidebar-width: ${this.settings.leftSidebarMaxWidth}px !important;
+      }` : ""}
+      ${this.settings.rightSidebar ? `
+      body {
         --right-sidebar-width: ${this.settings.rightSidebarMaxWidth}px !important;
-      }
+      }` : ""}
     `;
     
     // Add the style element to the document head
     document.head.appendChild(styleEl);
+  }
+
+  // Toggle body classes that gate the per-sidebar max-width CSS rules in
+  // styles.css, so a disabled sidebar is left at Obsidian's native width
+  // instead of being force-constrained to the configured maximum.
+  updateEnabledBodyClasses() {
+    document.body.classList.toggle("qps-left-enabled", this.settings.leftSidebar);
+    document.body.classList.toggle("qps-right-enabled", this.settings.rightSidebar);
   }
 
   expandRight() {
@@ -458,16 +545,16 @@ export default class OpenSidebarHover extends Plugin {
   }
   
   collapseRight() {
-    // Only collapse if not pinned
-    if (!this.isPinnedRight) {
+    // Only collapse if the feature is enabled and not pinned
+    if (this.settings.rightSidebar && !this.isPinnedRight) {
       this.rightSplit.collapse();
       this.isHoveringRight = false;
     }
   }
   
   collapseLeft() {
-    // Only collapse if not pinned
-    if (!this.isPinnedLeft) {
+    // Only collapse if the feature is enabled and not pinned
+    if (this.settings.leftSidebar && !this.isPinnedLeft) {
       this.leftSplit.collapse();
       this.isHoveringLeft = false;
     }
@@ -543,7 +630,6 @@ export default class OpenSidebarHover extends Plugin {
   
   rightSplitMouseLeaveHandler = () => {
     if (this.settings.onlyWhenFocused && !document.hasFocus()) return;
-    if (this.isActivelyEditing()) return;
 
     if (this.settings.rightSidebar && !this.isPinnedRight) {
       this.isHoveringRight = false;
@@ -564,7 +650,6 @@ export default class OpenSidebarHover extends Plugin {
 
   leftSplitMouseLeaveHandler = () => {
     if (this.settings.onlyWhenFocused && !document.hasFocus()) return;
-    if (this.isActivelyEditing()) return;
 
     if (this.settings.leftSidebar && !this.isPinnedLeft) {
       this.isHoveringLeft = false;
@@ -622,6 +707,8 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.leftSidebar).onChange(async (value) => {
           this.plugin.settings.leftSidebar = value;
+          this.plugin.updateEnabledBodyClasses();
+          this.plugin.updateCSSVariables();
           await this.plugin.saveSettings();
         })
       );
@@ -636,6 +723,8 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.rightSidebar)
           .onChange(async (value) => {
             this.plugin.settings.rightSidebar = value;
+            this.plugin.updateEnabledBodyClasses();
+            this.plugin.updateCSSVariables();
             await this.plugin.saveSettings();
           })
       );
@@ -759,11 +848,11 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
       )
       .addText((text) => {
         text
-          .setPlaceholder("300")
+          .setPlaceholder("1200")
           .setValue(this.plugin.settings.sidebarDelay.toString())
           .onChange(async (value) => {
             const v = Number(value);
-            if (!v || isNaN(v) || v < 0) {
+            if (value === "" || isNaN(v) || v < 0) {
               this.plugin.settings.sidebarDelay = DEFAULT_SETTINGS.sidebarDelay;
             } else {
               this.plugin.settings.sidebarDelay = v;
@@ -783,7 +872,7 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
           .setValue(this.plugin.settings.sidebarExpandDelay.toString())
           .onChange(async (value) => {
             const v = Number(value);
-            if (!v || isNaN(v) || v < 0) {
+            if (value === "" || isNaN(v) || v < 0) {
               this.plugin.settings.sidebarExpandDelay = DEFAULT_SETTINGS.sidebarExpandDelay;
             } else {
               this.plugin.settings.sidebarExpandDelay = v;
@@ -801,8 +890,8 @@ class SidebarHoverSettingsTab extends PluginSettingTab {
       )
       .addText((text) => {
         text
-          .setPlaceholder("300")
-          .setValue(this.plugin.settings.expandCollapseSpeed?.toString() || "300")
+          .setPlaceholder("550")
+          .setValue(this.plugin.settings.expandCollapseSpeed?.toString() || "550")
           .onChange(async (value) => {
             const v = Number(value);
             if (!value || isNaN(v) || v < 0) {

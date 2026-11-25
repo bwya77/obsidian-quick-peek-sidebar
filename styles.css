@@ -1,13 +1,18 @@
 
 :root {
-    --sidebar-expand-collapse-speed: 300ms;
+    --sidebar-expand-collapse-speed: 550ms;
     --sidebar-expand-delay: 200ms;
     --left-sidebar-max-width: 300px;
     --right-sidebar-max-width: 300px;
 }
 
-body {
+/* Only force the custom max width (via Obsidian's own CSS vars) when that
+   sidebar's hover feature is enabled */
+body.qps-left-enabled {
     --sidebar-width: var(--left-sidebar-max-width) !important;
+}
+
+body.qps-right-enabled {
     --right-sidebar-width: var(--right-sidebar-max-width) !important;
 }
 
@@ -15,23 +20,31 @@ body {
     display: none;
 }
 
-/* Animation speed and size for regular sidebars */
-.workspace-split.mod-horizontal.mod-left-split,
-.workspace-split.mod-horizontal.mod-right-split,
-.workspace-split.mod-horizontal.mod-sidedock {
-    transition: all var(--sidebar-expand-collapse-speed) ease !important;
-    max-width: var(--left-sidebar-max-width) !important;
-    width: var(--left-sidebar-max-width);
+/* Animation duration transition fallback for regular sidebars (actual
+   collapse/expand speed is driven via the patched Web Animations API call
+   in main.ts, since Obsidian's own collapse/expand doesn't use CSS transitions).
+   Gated per side so a disabled sidebar keeps Obsidian's native behavior. */
+body.qps-left-enabled .workspace-split.mod-horizontal.mod-left-split {
     transition: width var(--sidebar-expand-collapse-speed) ease, max-width var(--sidebar-expand-collapse-speed) ease !important;
 }
 
-.workspace-split.mod-horizontal.mod-right-split {
+body.qps-right-enabled .workspace-split.mod-horizontal.mod-right-split {
+    transition: width var(--sidebar-expand-collapse-speed) ease, max-width var(--sidebar-expand-collapse-speed) ease !important;
+}
+
+/* Only force the custom max width when that sidebar's hover feature is enabled */
+body.qps-left-enabled .workspace-split.mod-horizontal.mod-left-split {
+    max-width: var(--left-sidebar-max-width) !important;
+    width: var(--left-sidebar-max-width);
+}
+
+body.qps-right-enabled .workspace-split.mod-horizontal.mod-right-split {
     max-width: var(--right-sidebar-max-width) !important;
     width: var(--right-sidebar-max-width);
 }
 
 /* Overlay mode styles */
-.sidebar-overlay-mode .workspace-split.mod-horizontal.mod-sidedock.mod-left-split {
+body.qps-left-enabled.sidebar-overlay-mode .workspace-split.mod-horizontal.mod-sidedock.mod-left-split {
     max-width: var(--left-sidebar-max-width);
     position: absolute;
     left: var(--ribbon-width);
@@ -40,7 +53,7 @@ body {
     transition: transform var(--sidebar-expand-collapse-speed) ease !important;
 }
 
-.sidebar-overlay-mode .workspace-split.mod-horizontal.mod-sidedock.mod-right-split {
+body.qps-right-enabled.sidebar-overlay-mode .workspace-split.mod-horizontal.mod-sidedock.mod-right-split {
     max-width: var(--right-sidebar-max-width);
     position: absolute;
     right: 0;
