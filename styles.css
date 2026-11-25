@@ -67,9 +67,14 @@ body {
     pointer-events: auto;
 }
 
-/* Allow hover detection for collapsed sidebars */
-.workspace-split.mod-left-split.is-collapsed,
-.workspace-split.mod-right-split.is-collapsed {
+/* Trigger zones for collapsed sidebars - ensures mouseenter fires */
+.open-sidebar-hover-plugin .workspace-split.mod-left-split.is-collapsed {
+    min-width: var(--left-trigger-width, 1px) !important;
+    pointer-events: auto;
+}
+
+.open-sidebar-hover-plugin .workspace-split.mod-right-split.is-collapsed {
+    min-width: var(--right-trigger-width, 1px) !important;
     pointer-events: auto;
 }
 
